@@ -6,7 +6,9 @@ if CLIENT then
         antialias = true,
     })
 end
-
+local isInputBlocked = false
+local DraggingNode = nil
+local DraggingNodeLabel = nil
 local CodeEditor = {
     Name = "3DEMC_Code_Studio",
     Version = "1.2",
@@ -284,7 +286,7 @@ function CodeEditor:CreateMainWindow()
         {"Открыть недавний", function() print("Открыть недавний файл") end},
         "SPACER",
         {"Сохранить", function() CodeEditor:SaveCurrentFile() end},
-        {"Сохранить как...", function() print("Сохранить файл как...") end},
+        {"Сохранить как...", function() CodeEditor:CreateNewFileDialog() end},
         {"Сохранить все", function() print("Сохранить все файлы") end},
         {"Автосохранение", function() print("Настройки автосохранения") end},
         "SPACER",
@@ -398,312 +400,424 @@ function CodeEditor:CreateMainWindow()
     end
     self.ContentPanel = content
 
----ЛЕВАЯ ЧАСТЬ CODE STUDIO---
-local fileBrowser = vgui.Create("DScrollPanel", content)
-fileBrowser:SetSize(200, content:GetTall() - 30)
-fileBrowser:SetPos(0, 0)
-fileBrowser.Paint = function(self, w, h)
-    draw.RoundedBox(0, 0, 0, w, h, Color(40, 40, 40))
-end
-self.FileBrowser = fileBrowser
-
--- Кнопки управления
-local buttonPanel = vgui.Create("DPanel", fileBrowser)
-buttonPanel:SetSize(180, 30)
-buttonPanel:SetPos(10, 5)
-buttonPanel.Paint = function() end
-
--- Кнопка обновления
-local refreshBtn = vgui.Create("DButton", buttonPanel)
-refreshBtn:SetSize(25, 25)
-refreshBtn:SetPos(0, 0)
-refreshBtn:SetImage("RES.png")  -- Путь к изображению для обновления
-refreshBtn.DoClick = function()
-    CodeEditor:RefreshFileTree()
-end
-
--- Кнопка создания файла
-local newFileBtn = vgui.Create("DButton", buttonPanel)
-newFileBtn:SetSize(25, 25)
-newFileBtn:SetPos(30, 0)
-newFileBtn:SetImage("FILE.png")  -- Путь к изображению для создания файла
-newFileBtn.DoClick = function()
-    CodeEditor:CreateNewFileDialog()
-end
-
--- Кнопка создания папки
-local newFolderBtn = vgui.Create("DButton", buttonPanel)
-newFolderBtn:SetSize(25, 25)
-newFolderBtn:SetPos(60, 0)
-newFolderBtn:SetImage("PAPKA.png")  -- Путь к изображению для создания папки
-newFolderBtn.DoClick = function()
-    CodeEditor:CreateNewFolderDialog()
-end
-
--- File tree
-local fileTree = vgui.Create("DTree", fileBrowser)
-fileTree:SetSize(180, fileBrowser:GetTall() - 40)
-fileTree:SetPos(10, 40)
-fileTree:SetIndentSize(10)
-fileTree:SetBackgroundColor(Color(40, 40, 40))
-self.FileTree = fileTree
-
--- Custom folder icon
-fileTree.OnNodeCreated = function(self, node)
-    if node.IsFolder then
-        node:SetIcon("icon16/folder.png")
-    else
-        node:SetIcon("icon16/page_white_text.png")
+    ---ЛЕВАЯ ЧАСТЬ CODE STUDIO---
+    local fileBrowser = vgui.Create("DScrollPanel", content)
+    fileBrowser:SetSize(200, content:GetTall() - 30)
+    fileBrowser:SetPos(0, 0)
+    fileBrowser.Paint = function(self, w, h)
+        draw.RoundedBox(0, 0, 0, w, h, Color(40, 40, 40))
     end
-    node.Label:SetTextColor(Color(200, 200, 200))
-end
+    self.FileBrowser = fileBrowser
+
+    -- Кнопки управления
+    local buttonPanel = vgui.Create("DPanel", fileBrowser)
+    buttonPanel:SetSize(180, 30)
+    buttonPanel:SetPos(10, 5)
+    buttonPanel.Paint = function() end
+
+    -- Кнопка обновления
+    local refreshBtn = vgui.Create("DButton", buttonPanel)
+    refreshBtn:SetSize(25, 25)
+    refreshBtn:SetPos(0, 0)
+    refreshBtn:SetImage("RES.png")  -- Путь к изображению для обновления
+    refreshBtn.DoClick = function()
+        CodeEditor:RefreshFileTree()
+    end
+
+    -- Кнопка создания файла
+    local newFileBtn = vgui.Create("DButton", buttonPanel)
+    newFileBtn:SetSize(25, 25)
+    newFileBtn:SetPos(30, 0)
+    newFileBtn:SetImage("FILE.png")  -- Путь к изображению для создания файла
+    newFileBtn.DoClick = function()
+        CodeEditor:CreateNewFileDialog()
+    end
+
+    -- Кнопка создания папки
+    local newFolderBtn = vgui.Create("DButton", buttonPanel)
+    newFolderBtn:SetSize(25, 25)
+    newFolderBtn:SetPos(60, 0)
+    newFolderBtn:SetImage("PAPKA.png")  -- Путь к изображению для создания папки
+    newFolderBtn.DoClick = function()
+        CodeEditor:CreateNewFolderDialog()
+    end
+
+    -- File tree
+    local fileTree = vgui.Create("DTree", fileBrowser)
+    fileTree:SetSize(180, fileBrowser:GetTall() - 40)
+    fileTree:SetPos(10, 40)
+    fileTree:SetIndentSize(10)
+    fileTree:SetBackgroundColor(Color(40, 40, 40))
+    self.FileTree = fileTree
+
+    -- Custom folder icon
+    fileTree.OnNodeCreated = function(self, node)
+        if node.IsFolder then
+            node:SetIcon("icon16/folder.png")
+        else
+            node:SetIcon("icon16/page_white_text.png")
+        end
+        node.Label:SetTextColor(Color(200, 200, 200))
+    end
 
 
--- Function to populate the tree
--- Функция для безопасного удаления файла
-function SafeDeleteFile(filePath)
-    if file.Exists(filePath, "DATA") then
-        -- Пытаемся удалить файл
+    -- Function to populate the tree
+    -- Функция для безопасного удаления файла
+    function SafeDeleteFile(filePath)
+        if file.Exists(filePath, "DATA") then
+            -- Пытаемся удалить файл
+            return file.Delete(filePath)
+        end
+        return false
+    end
+
+
+    function CodeEditor:PopulateFileTree(path, parentNode)
+        local files, folders = file.Find(path .. "/*", "DATA")
+
+        -- Зона дропа в корень (только если это корневой вызов)
+        if parentNode == self.FileTree and not IsValid(self.DropRootPanel) then
+            self.DropRootPanel = vgui.Create("DPanel", self.FileTree:GetCanvas())
+            self.DropRootPanel:Dock(TOP)
+            self.DropRootPanel:SetTall(300) -- Начальная высота 300
+            self.DropRootPanel:SetMouseInputEnabled(true)
+            
+            -- Добавляем возможность скролла
+            self.DropRootPanel.OnMouseWheeled = function(_, delta)
+                self.FileTree:GetVBar():AddScroll(delta * -2)
+            end
+        
+            self.DropRootPanel.Paint = function(_, w, h)
+                surface.SetDrawColor(10, 10, 10, 80)
+                surface.DrawRect(0, 0, w, 4)
+                
+                -- Если контент больше 300, показываем индикатор
+                if h > 300 then
+                    surface.SetDrawColor(100, 100, 100, 100)
+                    surface.DrawRect(w - 10, 0, 2, h)
+                end
+            end
+        
+            self.DropRootPanel:Receiver("FileTreeNode", function(_, droppedPanels, bDoDrop)
+                if not bDoDrop then return end
+        
+                local fromNode = droppedPanels[1]
+                if not IsValid(fromNode) or not fromNode.Path then return end
+        
+                local rootPath = self.FileSystem.RootDir
+                local toPath = rootPath .. "/" .. fromNode:GetText()
+        
+                -- Защита от самого себя и вложенности
+                if fromNode.Path == toPath or string.StartWith(toPath .. "/", fromNode.Path .. "/") then
+                    Derma_Message("Нельзя переместить в самого себя или в подпапку", "Ошибка", "OK")
+                    return
+                end
+        
+                if fromNode.IsFolder then
+                    file.CreateDir(rootPath)
+                    file.Rename(fromNode.Path, toPath)
+                else
+                    local content = file.Read(fromNode.Path, "DATA")
+                    if content then
+                        file.Write(toPath, content)
+                        file.Delete(fromNode.Path)
+                    end
+                end
+        
+                self:RefreshFileTree()
+            end)
+            
+            -- Автоматически подстраиваем высоту при скролле
+            self.FileTree:GetVBar().OnChanged = function(_, val)
+                local maxHeight = math.max(300, self.FileTree:GetCanvas():GetTall())
+                local newHeight = math.Clamp(300 - val, 300, maxHeight)
+                self.DropRootPanel:SetTall(newHeight)
+            end
+        end
+
+        -- Остальной код функции остается без изменений
+        local function AddDropPanel(node)
+            local drop = vgui.Create("DPanel", node)
+            drop:SetSize(node:GetWide(), node:GetTall())
+            drop:SetPos(0, 0)
+            drop:SetVisible(true)
+            drop:SetMouseInputEnabled(true)
+            drop:SetPaintBackground(false)
+
+            drop:Receiver("FileTreeNode", function(pnl, droppedPanels, bDoDrop, command, x, y)
+                if not bDoDrop then return end
+
+                local fromNode = droppedPanels[1]
+                local toNode = node
+                if not IsValid(fromNode) or not fromNode.Path or not toNode.Path then return end
+
+                if fromNode.Path == toNode.Path or string.StartWith(toNode.Path .. "/", fromNode.Path .. "/") then
+                    Derma_Message("Нельзя переместить в самого себя или в подпапку", "Ошибка", "OK")
+                    return
+                end
+
+                local fromPath = fromNode.Path
+                local toPath = toNode.Path .. "/" .. fromNode:GetText()
+
+                if fromNode.IsFolder then
+                    file.CreateDir(toNode.Path)
+                    file.Rename(fromPath, toPath)
+                else
+                    local content = file.Read(fromPath, "DATA")
+                    if content then
+                        file.Write(toPath, content)
+                        file.Delete(fromPath)
+                    end
+                end
+
+                self:RefreshFileTree()
+            end)
+        end
+
+        -- Папки
+        table.sort(folders)
+        for _, folder in ipairs(folders) do
+            local folderPath = path .. "/" .. folder
+            local folderNode = parentNode:AddNode(folder)
+            folderNode:SetIcon("icon16/folder.png")
+            folderNode:SetExpanded(false)
+            folderNode.Path = folderPath
+            folderNode.IsFolder = true
+
+            folderNode:Droppable("FileTreeNode")
+            folderNode.OnMousePressed = function(_, code)
+                if code == MOUSE_LEFT then
+                    dragndrop.Handle("FileTreeNode", folderNode)
+                end
+            end
+
+            AddDropPanel(folderNode)
+            self:PopulateFileTree(folderPath, folderNode)
+
+            folderNode.DoRightClick = function()
+                local menu = DermaMenu()
+                menu:AddOption("Создать папку", function()
+                    self:CreateNewFolderDialog(folderPath)
+                end)
+                menu:AddOption("Создать файл", function()
+                    self:CreateNewFileDialog(folderPath)
+                end)
+                menu:AddOption("Удалить папку", function()
+                    Derma_Query("Вы уверены, что хотите удалить папку \"" .. folderNode:GetText() .. "\"?", "Подтверждение",
+                        "Да", function()
+                            if DeleteFolderRecursive(folderNode.Path) then
+                                self:RefreshFileTree()
+                            else
+                                Derma_Message("Не удалось удалить папку!", "Ошибка", "OK")
+                            end
+                        end,
+                        "Нет", function() end
+                    )
+                end)
+                menu:Open()
+            end
+        end
+
+        -- Файлы
+        table.sort(files)
+        for _, fileName in ipairs(files) do
+            local filePath = path .. "/" .. fileName
+            local fileNode = parentNode:AddNode(fileName)
+            fileNode:SetIcon("icon16/page_white_text.png")
+            fileNode.Path = filePath
+            fileNode.IsFolder = false
+
+            fileNode:Droppable("FileTreeNode")
+            fileNode.OnMousePressed = function(_, code)
+                if code == MOUSE_LEFT then
+                    dragndrop.Handle("FileTreeNode", fileNode)
+                end
+            end
+
+            fileNode.DoClick = function()
+                self:OpenFile(filePath)
+            end
+
+            fileNode.DoRightClick = function()
+                local menu = DermaMenu()
+                menu:AddOption("Удалить файл", function()
+                    Derma_Query("Вы уверены, что хотите удалить файл \"" .. fileNode:GetText() .. "\"?", "Подтверждение",
+                        "Да", function()
+                            if file.Delete(fileNode.Path) then
+                                self:RefreshFileTree()
+                            else
+                                Derma_Message("Не удалось удалить файл!", "Ошибка", "OK")
+                            end
+                        end,
+                        "Нет", function() end
+                    )
+                end)
+                menu:Open()
+            end
+        end
+    end
+
+
+    function CodeEditor:RefreshFileTree()
+        if not IsValid(self.FileTree) then return end
+        self.FileTree:Clear()
+        -- Заполняем дерево файлов
+        self:PopulateFileTree(self.FileSystem.CurrentDir, self.FileTree)
+    end
+
+    -- Функция для рекурсивного удаления папки
+    function DeleteFolderRecursive(folderPath)
+        -- Сначала удаляем все файлы в папке
+        local files, folders = file.Find(folderPath .. "/*", "DATA")
+        
+        for _, file in ipairs(files) do
+            local filePath = folderPath .. "/" .. file
+            if not file.Delete(filePath) then
+                return false -- Не удалось удалить файл
+            end
+        end
+        
+        -- Затем рекурсивно удаляем все подпапки
+        for _, folder in ipairs(folders) do
+            local subFolderPath = folderPath .. "/" .. folder
+            if not DeleteFolderRecursive(subFolderPath) then
+                return false -- Не удалось удалить подпапку
+            end
+        end
+        
+        -- Наконец, удаляем саму папку
+        return file.Delete(folderPath)
+    end
+
+    -- Функция для безопасного удаления файла
+    function SafeDeleteFile(filePath)
         return file.Delete(filePath)
     end
-    return false
-end
 
--- Метод для заполнения дерева файлов
-function CodeEditor:PopulateFileTree(path, parentNode)
-    local files, folders = file.Find(path .. "/*", "DATA")
-    
-    -- Добавляем папки первыми
-    table.sort(folders)
-    for _, folder in ipairs(folders) do
-        local folderPath = path .. "/" .. folder
-        local folderNode = parentNode:AddNode(folder)
-        folderNode:SetIcon("icon16/folder.png")
-        folderNode:SetExpanded(false)
-        folderNode.Path = folderPath
-        folderNode.IsFolder = true
+    function CodeEditor:GetSelectedFolder()
+        if not IsValid(self.FileTree) then return self.FileSystem.CurrentDir end
         
-        -- Рекурсивно заполняем подкаталоги
-        self:PopulateFileTree(folderPath, folderNode)
+        local selectedNode = self.FileTree:GetSelectedItem()
+        if not selectedNode then return self.FileSystem.CurrentDir end
         
-        -- Контекстное меню для папки
-        folderNode.DoRightClick = function()
-            print("Правый клик на папке: " .. folderNode:GetText())  -- Отладочный вывод
-            local menu = DermaMenu()
-            
-            -- Добавляем опцию для удаления папки
-            menu:AddOption("Удалить папку", function()
-                Derma_Query("Вы уверены, что хотите удалить папку \"" .. folderNode:GetText() .. "\"?", "Подтверждение",
-                    "Да", function()
-                        -- Удаляем папку рекурсивно
-                        if DeleteFolderRecursive(folderNode.Path) then
-                            print("Папка успешно удалена: " .. folderNode.Path)
-                            CodeEditor:RefreshFileTree()
-                        else
-                            Derma_Message("Не удалось удалить папку!", "Ошибка", "OK")
-                        end
-                    end,
-                    "Нет", function() end
-                )
-            end)
-            
-            menu:Open()
-        end
+        return selectedNode.IsFolder and selectedNode.Path or self.FileSystem.CurrentDir
     end
-    
-    -- Добавляем файлы
-    table.sort(files)
-    for _, file in ipairs(files) do
-        local filePath = path .. "/" .. file
-        local fileNode = parentNode:AddNode(file)
-        fileNode:SetIcon("icon16/page_white_text.png")
-        fileNode.Path = filePath
-        fileNode.IsFolder = false
+
+    -- Function to create new folder dialog
+    function CodeEditor:CreateNewFolderDialog()
+        isInputBlocked = true
+        local currentPath = self:GetSelectedFolder() -- Используем выбранную папку вместо текущей директории
         
-        -- Обработка клика по файлу
-        fileNode.DoClick = function()
-            CodeEditor:OpenFile(filePath)
+        local frame = vgui.Create("DFrame")
+        frame:SetSize(300, 150)
+        frame:Center()
+        frame:SetTitle("Создать папку")
+        frame:MakePopup()
+        frame.OnClose = function()
+            isInputBlocked = false
         end
         
-        -- Контекстное меню для файлов
-        fileNode.DoRightClick = function()
-            print("Правый клик на файле: " .. fileNode:GetText())  -- Отладочный вывод
-            local menu = DermaMenu()
+        local nameEntry = vgui.Create("DTextEntry", frame)
+        nameEntry:SetPlaceholderText("Введите имя папки...")
+        nameEntry:Dock(TOP)
+        nameEntry:DockMargin(5, 5, 5, 5)
         
-            -- Добавляем опцию для удаления файла
-            menu:AddOption("Удалить файл", function()
-                Derma_Query("Вы уверены, что хотите удалить файл \"" .. fileNode:GetText() .. "\"?", "Подтверждение",
-                    "Да", function()
-                        -- Удаляем файл
-                        if SafeDeleteFile(fileNode.Path) then
-                            print("Файл успешно удалён: " .. fileNode.Path)
-                            CodeEditor:RefreshFileTree()
-                        else
-                            Derma_Message("Не удалось удалить файл!", "Ошибка", "OK")
-                        end
-                    end,
-                    "Нет", function() end
-                )
-            end)
-        
-            menu:Open()
-        end
-    end
-end
-
-
-function CodeEditor:RefreshFileTree()
-    if not IsValid(self.FileTree) then return end
-    self.FileTree:Clear()
-    -- Заполняем дерево файлов
-    self:PopulateFileTree(self.FileSystem.CurrentDir, self.FileTree)
-end
-
--- Функция для рекурсивного удаления папки
-function DeleteFolderRecursive(folderPath)
-    -- Сначала удаляем все файлы в папке
-    local files, folders = file.Find(folderPath .. "/*", "DATA")
-    
-    for _, file in ipairs(files) do
-        local filePath = folderPath .. "/" .. file
-        if not file.Delete(filePath) then
-            return false -- Не удалось удалить файл
-        end
-    end
-    
-    -- Затем рекурсивно удаляем все подпапки
-    for _, folder in ipairs(folders) do
-        local subFolderPath = folderPath .. "/" .. folder
-        if not DeleteFolderRecursive(subFolderPath) then
-            return false -- Не удалось удалить подпапку
-        end
-    end
-    
-    -- Наконец, удаляем саму папку
-    return file.Delete(folderPath)
-end
-
--- Функция для безопасного удаления файла
-function SafeDeleteFile(filePath)
-    return file.Delete(filePath)
-end
-
-function CodeEditor:GetSelectedFolder()
-    if not IsValid(self.FileTree) then return self.FileSystem.CurrentDir end
-    
-    local selectedNode = self.FileTree:GetSelectedItem()
-    if not selectedNode then return self.FileSystem.CurrentDir end
-    
-    return selectedNode.IsFolder and selectedNode.Path or self.FileSystem.CurrentDir
-end
-
--- Function to create new folder dialog
-function CodeEditor:CreateNewFolderDialog()
-    local currentPath = self:GetSelectedFolder() -- Используем выбранную папку вместо текущей директории
-    
-    local frame = vgui.Create("DFrame")
-    frame:SetSize(300, 150)
-    frame:Center()
-    frame:SetTitle("Создать папку")
-    frame:MakePopup()
-    
-    local nameEntry = vgui.Create("DTextEntry", frame)
-    nameEntry:SetPlaceholderText("Введите имя папки...")
-    nameEntry:Dock(TOP)
-    nameEntry:DockMargin(5, 5, 5, 5)
-    
-    local createBtn = vgui.Create("DButton", frame)
-    createBtn:Dock(BOTTOM)
-    createBtn:SetText("Создать")
-    createBtn.DoClick = function()
-        local folderName = nameEntry:GetText()
-        if folderName and folderName ~= "" then
-            local fullPath = currentPath .. "/" .. folderName
-            if not file.IsDir(fullPath, "DATA") then
-                file.CreateDir(fullPath)
-                CodeEditor:RefreshFileTree()
-                frame:Close()
-            else
-                Derma_Message("Папка с таким именем уже существует!", "Ошибка", "OK")
-            end
-        end
-    end
-end
-
--- Function to create new file dialog
-function CodeEditor:CreateNewFileDialog()
-    local currentPath = self:GetSelectedFolder()
-    
-    local frame = vgui.Create("DFrame")
-    frame:SetSize(350, 200) -- Увеличиваем высоту для нового элемента
-    frame:Center()
-    frame:SetTitle("Создать файл")
-    frame:MakePopup()
-    
-    -- Поле для имени файла
-    local nameEntry = vgui.Create("DTextEntry", frame)
-    nameEntry:SetPlaceholderText("Введите имя файла (без расширения)...")
-    nameEntry:Dock(TOP)
-    nameEntry:DockMargin(5, 5, 5, 5)
-    
-    -- Выпадающий список для расширений
-    local extensionCombo = vgui.Create("DComboBox", frame)
-    extensionCombo:Dock(TOP)
-    extensionCombo:DockMargin(5, 0, 5, 5)
-    extensionCombo:SetValue("Выберите расширение")
-    
-    -- Добавляем варианты расширений
-    for _, ext in ipairs(self.SupportedExtensions) do
-        extensionCombo:AddChoice(ext)
-    end
-    
-    -- Кнопка создания
-    local createBtn = vgui.Create("DButton", frame)
-    createBtn:Dock(BOTTOM)
-    createBtn:SetText("Создать")
-    createBtn.DoClick = function()
-        local fileName = nameEntry:GetText()
-        local _, selectedExtension = extensionCombo:GetSelected()
-        
-        if fileName and fileName ~= "" then
-            -- Если пользователь не выбрал расширение, используем .txt по умолчанию
-            if not selectedExtension or selectedExtension == "Выберите расширение" then
-                selectedExtension = ".txt"
-            end
-            
-            -- Удаляем точку, если пользователь её ввел
-            fileName = fileName:gsub("%..+$", "")
-            
-            local fullPath = currentPath .. "/" .. fileName .. selectedExtension
-            
-            if not file.Exists(fullPath, "DATA") then
-                -- Начальное содержимое в зависимости от типа файла
-                local initialContent = ""
-                if selectedExtension == ".lua" then
-                    initialContent = "-- Новый Lua файл\n-- Начните писать код здесь..."
-                elseif selectedExtension == ".json" then
-                    initialContent = "{\n    \n}"
+        local createBtn = vgui.Create("DButton", frame)
+        createBtn:Dock(BOTTOM)
+        createBtn:SetText("Создать")
+        createBtn.DoClick = function()
+            local folderName = nameEntry:GetText()
+            if folderName and folderName ~= "" then
+                local fullPath = currentPath .. "/" .. folderName
+                if not file.IsDir(fullPath, "DATA") then
+                    file.CreateDir(fullPath)
+                    CodeEditor:RefreshFileTree()
+                    frame:Close()
                 else
-                    initialContent = "-- Новый файл\n-- Начните писать код здесь..."
+                    Derma_Message("Папка с таким именем уже существует!", "Ошибка", "OK")
+                end
+            end
+        end
+    end
+
+    -- Function to create new file dialog
+    function CodeEditor:CreateNewFileDialog()
+        isInputBlocked = true
+        local currentPath = self:GetSelectedFolder()
+        
+        local frame = vgui.Create("DFrame")
+        frame:SetSize(350, 200) -- Увеличиваем высоту для нового элемента
+        frame:Center()
+        frame:SetTitle("Создать файл")
+        frame:MakePopup()
+        frame.OnClose = function()
+            isInputBlocked = false -- Разблокируем ввод при закрытии окна
+        end
+        
+        -- Поле для имени файла
+        local nameEntry = vgui.Create("DTextEntry", frame)
+        nameEntry:SetPlaceholderText("Введите имя файла (без расширения)...")
+        nameEntry:Dock(TOP)
+        nameEntry:DockMargin(5, 5, 5, 5)
+        
+        -- Выпадающий список для расширений
+        local extensionCombo = vgui.Create("DComboBox", frame)
+        extensionCombo:Dock(TOP)
+        extensionCombo:DockMargin(5, 0, 5, 5)
+        extensionCombo:SetValue("Выберите расширение")
+        
+        -- Добавляем варианты расширений
+        for _, ext in ipairs(self.SupportedExtensions) do
+            extensionCombo:AddChoice(ext)
+        end
+        
+        -- Кнопка создания
+        local createBtn = vgui.Create("DButton", frame)
+        createBtn:Dock(BOTTOM)
+        createBtn:SetText("Создать")
+        createBtn.DoClick = function()
+            local fileName = nameEntry:GetText()
+            local _, selectedExtension = extensionCombo:GetSelected()
+            
+            if fileName and fileName ~= "" then
+                -- Если пользователь не выбрал расширение, используем .txt по умолчанию
+                if not selectedExtension or selectedExtension == "Выберите расширение" then
+                    selectedExtension = ".txt"
                 end
                 
-                file.Write(fullPath, initialContent)
-                CodeEditor:RefreshFileTree()
-                CodeEditor:OpenFile(fullPath)
-                frame:Close()
+                -- Удаляем точку, если пользователь её ввел
+                fileName = fileName:gsub("%..+$", "")
+                
+                local fullPath = currentPath .. "/" .. fileName .. selectedExtension
+                
+                if not file.Exists(fullPath, "DATA") then
+                    -- Начальное содержимое в зависимости от типа файла
+                    local initialContent = ""
+                    if selectedExtension == ".lua" then
+                        initialContent = "-- Новый Lua файл\n-- Начните писать код здесь..."
+                    elseif selectedExtension == ".json" then
+                        initialContent = "{\n    \n}"
+                    else
+                        initialContent = "-- Новый файл\n-- Начните писать код здесь..."
+                    end
+                    
+                    file.Write(fullPath, initialContent)
+                    CodeEditor:RefreshFileTree()
+                    CodeEditor:OpenFile(fullPath)
+                    frame:Close()
+                else
+                    Derma_Message("Файл с таким именем уже существует!", "Ошибка", "OK")
+                end
             else
-                Derma_Message("Файл с таким именем уже существует!", "Ошибка", "OK")
+                Derma_Message("Введите имя файла!", "Ошибка", "OK")
             end
-        else
-            Derma_Message("Введите имя файла!", "Ошибка", "OK")
         end
     end
-end
 
--- Initial population
-CodeEditor:RefreshFileTree()
----ЛЕВАЯ ЧАСТЬ CODE STUDIO КОНЕЦ---
----ПРАВАЯ ЧАСТЬ CODE STUDIO---
+    -- Initial population
+    CodeEditor:RefreshFileTree()
+    ---ЛЕВАЯ ЧАСТЬ CODE STUDIO КОНЕЦ---
+    ---ПРАВАЯ ЧАСТЬ CODE STUDIO---
     
     -- Создаем главный контейнер с скроллом для редактора кода
     local editorScrollPanel = vgui.Create("DScrollPanel", content)
@@ -860,9 +974,9 @@ CodeEditor:RefreshFileTree()
     end 
 
     hook.Add("Think", "CodeEditor_Input", function()
-        if not isFocused then return end
-    
         local curTime = CurTime()
+    
+   if not isFocused or isInputBlocked then return end
         if curTime - lastCharTime < charDelay then return end
     
         local delayTable = {
@@ -1139,6 +1253,13 @@ CodeEditor:RefreshFileTree()
                 self:MouseCapture(true)
             end
         end
+        
+        handle.OnMouseReleased = function(self, code)
+            if code == MOUSE_LEFT then
+                isResizing = false
+                self:MouseCapture(false)
+            end
+        end
     end
     
     SetupResizeHandle(self.ResizeHandles.top, "top")
@@ -1149,8 +1270,8 @@ CodeEditor:RefreshFileTree()
     -- Mouse release handler
     gui.EnableScreenClicker(true)
     
-    hook.Add("VGUIMouseReleased", "CodeEditorResizeStop", function()
-        if isResizing then
+    hook.Add("VGUIMouseReleased", "CodeEditorResizeStop", function(code)
+        if code == MOUSE_LEFT then
             isResizing = false
             for _, handle in pairs(CodeEditor.ResizeHandles) do
                 if IsValid(handle) then
@@ -1168,7 +1289,7 @@ CodeEditor:RefreshFileTree()
             local x, y = resizeStartPos.x, resizeStartPos.y
             local w, h = resizeStartSize.w, resizeStartSize.h
             
-            -- Handle different resize types
+            -- Обработка разных типов ресайза
             if resizeType == "top" then
                 local newHeight = resizeStartSize.h - (mouseY - resizeStartPos.y)
                 if newHeight >= 300 then
@@ -1176,7 +1297,7 @@ CodeEditor:RefreshFileTree()
                     h = newHeight
                 end
             elseif resizeType == "bottom" then
-                h = resizeStartSize.h + (mouseY - (resizeStartPos.y + resizeStartSize.h))
+                h = math.max(300, resizeStartSize.h + (mouseY - (resizeStartPos.y + resizeStartSize.h)))
             elseif resizeType == "left" then
                 local newWidth = resizeStartSize.w - (mouseX - resizeStartPos.x)
                 if newWidth >= 400 then
@@ -1184,18 +1305,18 @@ CodeEditor:RefreshFileTree()
                     w = newWidth
                 end
             elseif resizeType == "right" then
-                w = resizeStartSize.w + (mouseX - (resizeStartPos.x + resizeStartSize.w))
+                w = math.max(400, resizeStartSize.w + (mouseX - (resizeStartPos.x + resizeStartSize.w)))
             end
             
-            -- Apply minimum sizes
+            -- Применяем минимальные размеры
             w = math.max(400, w)
             h = math.max(300, h)
             
-            -- Update window position and size
+            -- Обновляем позицию и размер окна
             MainWindow:SetPos(x, y)
             MainWindow:SetSize(w, h)
             
-            -- Update UI elements
+            -- Обновляем элементы интерфейса
             CodeEditor:UpdateWindowElements()
         end
     end
@@ -1295,11 +1416,15 @@ function CodeEditor:CreateNewFile()
 end
 
 function CodeEditor:OpenFileDialog()
+    isInputBlocked = true
     local frame = vgui.Create("DFrame")
     frame:SetSize(500, 400)
     frame:Center()
     frame:SetTitle("Открыть файл")
     frame:MakePopup()
+    frame.OnClose = function()
+        isInputBlocked = false
+    end
     
     local fileBrowser = vgui.Create("DListView", frame)
     fileBrowser:Dock(FILL)
@@ -1340,11 +1465,15 @@ function CodeEditor:OpenFileDialog()
 end
 
 function CodeEditor:SaveFileDialog()
+    isInputBlocked = true
     local frame = vgui.Create("DFrame")
     frame:SetSize(300, 150)
     frame:Center()
     frame:SetTitle("Сохранить файл")
     frame:MakePopup()
+    frame.OnClose = function()
+        isInputBlocked = false
+    end
     
     local nameEntry = vgui.Create("DTextEntry", frame)
     nameEntry:SetPlaceholderText("Введите имя файла...")
